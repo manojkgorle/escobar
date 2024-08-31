@@ -46,7 +46,7 @@ use tokio::sync::{mpsc::Sender, RwLock};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Limits how much data a user can propose.
-pub const PROPOSE_LIMIT_BYTES: usize = 1024 * 1024;
+pub const PROPOSE_LIMIT_BYTES: usize = 1024 * 1024; // @todo this should be configured.
 
 /// Represents VM-specific states.
 /// Defined in a separate struct, for interior mutability in [`Vm`](Vm).
@@ -123,6 +123,7 @@ where
 
     /// Signals the consensus engine that a new block is ready to be created.
     pub async fn notify_block_ready(&self) {
+        // @todo create a steady block creation engine.
         let vm_state = self.state.read().await;
         if let Some(to_engine) = &vm_state.to_engine {
             to_engine
@@ -339,6 +340,7 @@ where
 
     /// Builds a block from mempool data.
     async fn build_block(&self) -> io::Result<<Self as ChainVm>::Block> {
+        // @todo build empty blocks too.
         let mut mempool = self.mempool.write().await;
 
         log::info!("build_block called for {} mempool", mempool.len());

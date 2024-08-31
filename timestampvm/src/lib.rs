@@ -44,5 +44,10 @@ pub mod api;
 pub mod block;
 pub mod client;
 pub mod genesis;
+pub mod processor;
 pub mod state;
 pub mod vm;
+
+// @todo learn how to deploy and call solana contracts.
+
+// @todo for now lets emulate paytube itself. later lets update it to generalize.

@@ -8,14 +8,15 @@ use std::{
 
 use crate::block::Block;
 use avalanche_types::{choices, ids, subnet};
+use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 /// Manages block and chain states for this Vm, both in-memory and persistent.
 #[derive(Clone)]
 pub struct State {
-    pub db: Arc<RwLock<Box<dyn subnet::rpc::database::Database + Send + Sync>>>,
-
+    pub state_db: Arc<RwLock<PickleDb>>,
+    pub block_db: Arc<RwLock<PickleDb>>,
     /// Maps block Id to Block.
     /// Each element is verified but not yet accepted/rejected (e.g., preferred).
     pub verified_blocks: Arc<RwLock<HashMap<ids::Id, Block>>>,
@@ -24,15 +25,22 @@ pub struct State {
 impl Default for State {
     fn default() -> State {
         Self {
-            db: Arc::new(RwLock::new(
-                subnet::rpc::database::memdb::Database::new_boxed(),
-            )),
+            state_db: Arc::new(RwLock::new(PickleDb::new(
+                "state.db",
+                PickleDbDumpPolicy::AutoDump,
+                SerializationMethod::Json,
+            ))),
+            block_db: Arc::new(RwLock::new(PickleDb::new(
+                "block.db",
+                PickleDbDumpPolicy::AutoDump,
+                SerializationMethod::Json,
+            ))),
             verified_blocks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
 
-const LAST_ACCEPTED_BLOCK_KEY: &[u8] = b"last_accepted_block";
+const LAST_ACCEPTED_BLOCK_KEY: &str = "last_accepted_block";
 
 const STATUS_PREFIX: u8 = 0x0;
 
@@ -82,15 +90,8 @@ impl State {
     /// # Errors
     /// Fails if the db can't be updated
     pub async fn set_last_accepted_block(&self, blk_id: &ids::Id) -> io::Result<()> {
-        let mut db = self.db.write().await;
-        db.put(LAST_ACCEPTED_BLOCK_KEY, &blk_id.to_vec())
-            .await
-            .map_err(|e| {
-                Error::new(
-                    ErrorKind::Other,
-                    format!("failed to put last accepted block: {e:?}"),
-                )
-            })
+        let mut db = self.block_db.write().await;
+        db.set(LAST_ACCEPTED_BLOCK_KEY, &blk_id.to_vec()).unwrap().
     }
 
     /// Returns "true" if there's a last accepted block found.

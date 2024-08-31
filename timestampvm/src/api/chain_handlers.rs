@@ -20,7 +20,8 @@ pub trait Rpc {
 
     /// Proposes the arbitrary data.
     #[rpc(name = "proposeBlock", alias("timestampvm.proposeBlock"))]
-    fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>>;
+    fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>>; // @todo remove this method. instead add a method to submit transactions, to the endpoint.
+                                                                                                // @todo also build a block builder, that builds blocks periodically.
 
     /// Fetches the last accepted block.
     #[rpc(name = "lastAccepted", alias("timestampvm.lastAccepted"))]
@@ -29,6 +30,7 @@ pub trait Rpc {
     /// Fetches the block.
     #[rpc(name = "getBlock", alias("timestampvm.getBlock"))]
     fn get_block(&self, args: GetBlockArgs) -> BoxFuture<Result<GetBlockResponse>>;
+    // @todo add method to fetch the state based on the key given.
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

@@ -8,13 +8,13 @@ use clap::{crate_version, Command};
 use timestampvm::vm;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
-pub const APP_NAME: &str = "timestampvm";
+pub const APP_NAME: &str = "solavim";
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let matches = Command::new(APP_NAME)
         .version(crate_version!())
-        .about("Timestamp Vm")
+        .about("Solana Virtual Machine as Execution VM for Avalanche Subnet")
         .subcommands(vec![genesis::command(), vm_id::command()])
         .get_matches();
 
@@ -26,7 +26,7 @@ async fn main() -> io::Result<()> {
     match matches.subcommand() {
         Some((genesis::NAME, sub_matches)) => {
             let data = sub_matches.get_one::<String>("DATA").expect("required");
-            let genesis = timestampvm::genesis::Genesis { data: data.clone() };
+            let genesis = timestampvm::genesis::Genesis { data: data.clone() }; // @todo create the genesis file/block for the vm.
             println!("{genesis}");
 
             Ok(())
@@ -41,7 +41,7 @@ async fn main() -> io::Result<()> {
         }
 
         _ => {
-            log::info!("starting timestampvm");
+            log::info!("starting solavim");
 
             let (stop_ch_tx, stop_ch_rx): (Sender<()>, Receiver<()>) = broadcast::channel(1);
             let vm_server = subnet::rpc::vm::server::Server::new(vm::Vm::new(), stop_ch_tx);

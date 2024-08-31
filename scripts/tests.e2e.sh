@@ -106,13 +106,13 @@ cargo test --all-features --package e2e -- --show-output --nocapture
 #################################
 echo ""
 echo ""
-if [ -z "$NETWORK_RUNNER_ENABLE_SHUTDOWN" ]
+if [ "$NETWORK_RUNNER_ENABLE_SHUTDOWN" == "1" ];
 then
   echo "SKIPPED SHUTDOWN..."
   echo ""
   echo "RUN FOLLOWING TO CLEAN UP:"
-  echo "pkill -P ${NETWORK_RUNNER_PID} || true"
-  echo "kill -2 ${NETWORK_RUNNER_PID} || true"
+  # echo "pkill -P ${NETWORK_RUNNER_PID} || true"
+  # echo "kill -2 ${NETWORK_RUNNER_PID} || true"
   echo ""
 else
   echo "SHUTTING DOWN..."

@@ -31,7 +31,7 @@ pub struct Block {
     timestamp: u64,
     /// Arbitrary data.
     #[serde_as(as = "Hex0xBytes")]
-    data: Vec<u8>,
+    data: Vec<u8>, // @todo change this from data to svm txs.
 
     /// Current block status.
     #[serde(skip)]
@@ -57,7 +57,7 @@ impl Block {
         parent_id: ids::Id,
         height: u64,
         timestamp: u64,
-        data: Vec<u8>,
+        data: Vec<u8>, // @todo change this from data to svm txs.
         status: choices::status::Status,
     ) -> io::Result<Self> {
         let mut b = Self {
@@ -137,7 +137,7 @@ impl Block {
     /// Returns the data of this block.
     #[must_use]
     pub fn data(&self) -> &[u8] {
-        &self.data
+        &self.data // @todo change this from data to svm txs.
     }
 
     /// Returns the status of this block.
@@ -240,7 +240,8 @@ impl Block {
     /// Returns an error if the state can't be updated.
     pub async fn accept(&mut self) -> io::Result<()> {
         self.set_status(choices::status::Status::Accepted);
-
+        // @todo execute the txs here. and persist the state changes.
+        // @todo do not execute any txs while building the block. Only sequence the txs while building the block. and execute only accepted.
         // only decided blocks are persistent -- no reorg
         self.state.write_block(&self.clone()).await?;
         self.state.set_last_accepted_block(&self.id()).await?;
