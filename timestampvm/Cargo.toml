@@ -22,7 +22,7 @@ http-manager = { version = "0.0.14" }
 jsonrpc-core = "18.0.0"
 jsonrpc-core-client = { version = "18.0.0" }
 jsonrpc-derive = "18.0.0"
-log = "0.4.21"
+log = "0.4.22"
 pickledb = "0.5.1"
 semver = "1.0.22"
 serde = { version = "1.0.197", features = ["derive"] }
