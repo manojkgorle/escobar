@@ -8,7 +8,7 @@ use std::{
 
 use avalanche_network_runner_sdk::{BlockchainSpec, Client, GlobalConfig, StartRequest};
 use avalanche_types::{ids, jsonrpc::client::info as avalanche_sdk_info, subnet};
-
+use solana_sdk::pubkey::Pubkey;
 const AVALANCHEGO_VERSION: &str = "v1.10.9";
 
 #[tokio::test]
@@ -76,11 +76,10 @@ async fn e2e() {
         Path::new(&plugins_dir).join(vm_id.to_string()),
     )
     .unwrap();
-
+    let fee_payer = Pubkey::new_unique();
+    log::info!("fee payer: {}", fee_payer);
     // write some random genesis file
-    let genesis = timestampvm::genesis::Genesis {
-        data: random_manager::secure_string(10),
-    };
+    let genesis = timestampvm::genesis::Genesis::new(vec![fee_payer], vec![100000000]); // @todo add accounts here.
     let genesis_file_path = random_manager::tmp_path(10, None).unwrap();
     genesis.sync(&genesis_file_path).unwrap();
 
@@ -97,7 +96,7 @@ async fn e2e() {
             plugin_dir: plugins_dir,
             global_node_config: Some(
                 serde_json::to_string(&GlobalConfig {
-                    log_level: String::from("info"),
+                    log_level: String::from("debug"),
                 })
                 .unwrap(),
             ),
@@ -245,44 +244,50 @@ async fn e2e() {
     let height0 = resp.result.unwrap().block.height();
     assert_eq!(height0, 0);
 
-    log::info!("propose block");
-    let resp = timestampvm::client::propose_block(&ep, &chain_url_path, vec![0, 1, 2])
+    let resp = timestampvm::client::get_lamports(&ep, &chain_url_path, fee_payer)
         .await
         .unwrap();
-    log::info!("propose_block response from {}: {:?}", ep, resp);
+    log::info!("get_lamports response from {}: {:?}", ep, resp);
+    assert!(resp.result.clone().unwrap().lamports > 0);
+    assert!(resp.result.unwrap().lamports == 100000000);
+    // log::info!("propose block");
+    // let resp = timestampvm::client::propose_block(&ep, &chain_url_path, vec![0, 1, 2])
+    //     .await
+    //     .unwrap();
+    // log::info!("propose_block response from {}: {:?}", ep, resp);
 
-    // enough time for block builds
-    thread::sleep(Duration::from_secs(5));
+    // // enough time for block builds
+    // thread::sleep(Duration::from_secs(5));
 
-    log::info!("get last_accepted from chain handlers");
-    let resp = timestampvm::client::last_accepted(&ep, &chain_url_path)
-        .await
-        .unwrap();
-    log::info!("last_accepted response from {}: {:?}", ep, resp);
+    // log::info!("get last_accepted from chain handlers");
+    // let resp = timestampvm::client::last_accepted(&ep, &chain_url_path)
+    //     .await
+    //     .unwrap();
+    // log::info!("last_accepted response from {}: {:?}", ep, resp);
 
-    let blk_id = resp.result.unwrap().id;
+    // let blk_id = resp.result.unwrap().id;
 
-    log::info!("getting block {blk_id}");
-    let resp = timestampvm::client::get_block(&ep, &chain_url_path, &blk_id)
-        .await
-        .unwrap();
-    log::info!("get_block response from {}: {:?}", ep, resp);
-    let height1 = resp.result.unwrap().block.height();
-    assert_eq!(height0 + 1, height1);
+    // log::info!("getting block {blk_id}");
+    // let resp = timestampvm::client::get_block(&ep, &chain_url_path, &blk_id)
+    //     .await
+    //     .unwrap();
+    // log::info!("get_block response from {}: {:?}", ep, resp);
+    // let height1 = resp.result.unwrap().block.height();
+    // assert_eq!(0 + 1, height1);
 
-    // expects an error of
-    // "error":{"code":-32603,"message":"data 1048586-byte exceeds the limit 1048576-byte"}
-    log::info!("propose block beyond its limit");
-    let resp = timestampvm::client::propose_block(
-        &ep,
-        &chain_url_path,
-        vec![1; timestampvm::vm::PROPOSE_LIMIT_BYTES + 10],
-    )
-    .await
-    .unwrap();
-    assert!(resp.result.is_none());
-    assert!(resp.error.is_some());
-    log::info!("propose block response: {:?}", resp);
+    // // expects an error of
+    // // "error":{"code":-32603,"message":"data 1048586-byte exceeds the limit 1048576-byte"}
+    // log::info!("propose block beyond its limit");
+    // let resp = timestampvm::client::propose_block(
+    //     &ep,
+    //     &chain_url_path,
+    //     vec![1; timestampvm::vm::PROPOSE_LIMIT_BYTES + 10],
+    // )
+    // .await
+    // .unwrap();
+    // assert!(resp.result.is_none());
+    // assert!(resp.error.is_some());
+    // log::info!("propose block response: {:?}", resp);
 
     if crate::get_network_runner_enable_shutdown() {
         log::info!("shutdown is enabled... stopping...");

@@ -1,5 +1,7 @@
 //! Defines timestampvm genesis block.
 
+use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
 use std::{
     fmt,
     fs::{self, File},
@@ -7,23 +9,26 @@ use std::{
     path::Path,
 };
 
-use serde::{Deserialize, Serialize};
-
 /// Represents the genesis data specific to the VM.
 #[derive(Debug, Serialize, Deserialize, Eq, PartialEq, Clone)]
 pub struct Genesis {
-    pub data: String,
+    pub pubkeys: Vec<Pubkey>,
+    pub amount: Vec<u64>,
 }
 
 impl Default for Genesis {
     fn default() -> Self {
         Self {
-            data: String::from("Hello from Rust VM!"),
+            pubkeys: vec![],
+            amount: vec![],
         }
     }
 }
 
 impl Genesis {
+    pub fn new(pubkeys: Vec<Pubkey>, amount: Vec<u64>) -> Self {
+        Self { pubkeys, amount }
+    }
     /// Encodes the genesis to JSON bytes.
     /// # Errors
     /// Fails if `Self` can't be serialized
@@ -44,7 +49,7 @@ impl Genesis {
         S: AsRef<[u8]>,
     {
         serde_json::from_slice(d.as_ref())
-            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to decode {e}")))
+            .map_err(|e| Error::new(ErrorKind::Other, format!("failed to decodeeeeee {e}")))
     }
 
     /// Persists the genesis to a file.

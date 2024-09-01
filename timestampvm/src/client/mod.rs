@@ -7,6 +7,9 @@ use std::{
 
 use avalanche_types::{ids, jsonrpc};
 use serde::{Deserialize, Serialize};
+use solana_sdk::pubkey::Pubkey;
+
+// use crate::api::chain_handlers::GetLamportsResponse;
 
 /// Represents the RPC response for API `ping`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -150,6 +153,42 @@ pub async fn propose_block(
 
     serde_json::from_slice(&rb)
         .map_err(|e| Error::new(ErrorKind::Other, format!("failed propose_block '{e}'")))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GetLamportsResponse {
+    pub jsonrpc: String,
+    pub id: u32,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<crate::api::chain_handlers::GetLamportsResponse>,
+
+    /// Returns non-empty if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<APIError>,
+}
+
+pub async fn get_lamports(
+    http_rpc: &str,
+    url_path: &str,
+    pubkey: Pubkey,
+) -> io::Result<GetLamportsResponse> {
+    log::info!("get_lamports {http_rpc} with {url_path}");
+
+    let mut data = jsonrpc::RequestWithParamsHashMapArray::default();
+    data.method = String::from("timestampvm.getLamports");
+
+    let mut m = HashMap::new();
+    m.insert("pubkey".to_string(), pubkey.to_string());
+
+    let params = vec![m];
+    data.params = Some(params);
+
+    let d = data.encode_json()?;
+    let rb = http_manager::post_non_tls(http_rpc, url_path, &d).await?;
+
+    serde_json::from_slice(&rb)
+        .map_err(|e| Error::new(ErrorKind::Other, format!("failed get_lamports '{e}'")))
 }
 
 /// Represents the error (if any) for APIs.

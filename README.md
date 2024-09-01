@@ -1,3 +1,11 @@
+# Todo:
+- State module.✅
+- Transaction and block interfaces. ✅
+- marshalling and unmarshalling account shared data and santized transactions. ✅
+- rpc client and server.
+- block builder. ✅
+- program deployer.✅
+- genesis allocator.
 
 [<img alt="crates.io" src="https://img.shields.io/crates/v/timestampvm.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20">](https://crates.io/crates/timestampvm)
 [<img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-timestampvm-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20">](https://docs.rs/timestampvm)

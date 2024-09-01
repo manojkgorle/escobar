@@ -5,18 +5,21 @@ use std::{
     io::{self, Error, ErrorKind},
 };
 
-use crate::state;
+use crate::{processor, state};
 use avalanche_types::{
-    choices,
-    codec::serde::hex_0x_bytes::Hex0xBytes,
-    ids,
+    choices, ids,
     subnet::rpc::consensus::snowman::{self, Decidable},
 };
 use chrono::{Duration, Utc};
 use derivative::{self, Derivative};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
+use solana_sdk::nonce::state::DurableNonce;
+use solana_sdk::transaction::SanitizedTransaction;
+use solana_svm::account_saver::collect_accounts_to_store;
+pub mod deploy_tx;
 
+use deploy_tx::{deploy_program, DeployTx};
 /// Represents a block, specific to [`Vm`](crate::vm::Vm).
 #[serde_as]
 #[derive(Serialize, Deserialize, Clone, Derivative, Default)]
@@ -29,10 +32,11 @@ pub struct Block {
     height: u64,
     /// Unix second when this block was proposed.
     timestamp: u64,
-    /// Arbitrary data.
-    #[serde_as(as = "Hex0xBytes")]
-    data: Vec<u8>, // @todo change this from data to svm txs.
-
+    // #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    transactions: Vec<SanitizedTransaction>,
+    #[serde(default)]
+    deploy_tx: Vec<DeployTx>,
     /// Current block status.
     #[serde(skip)]
     status: choices::status::Status,
@@ -57,14 +61,16 @@ impl Block {
         parent_id: ids::Id,
         height: u64,
         timestamp: u64,
-        data: Vec<u8>, // @todo change this from data to svm txs.
+        transactions: Vec<SanitizedTransaction>,
+        deploy_tx: Vec<DeployTx>,
         status: choices::status::Status,
     ) -> io::Result<Self> {
         let mut b = Self {
             parent_id,
             height,
             timestamp,
-            data,
+            transactions,
+            deploy_tx,
             ..Default::default()
         };
 
@@ -134,12 +140,6 @@ impl Block {
         self.timestamp
     }
 
-    /// Returns the data of this block.
-    #[must_use]
-    pub fn data(&self) -> &[u8] {
-        &self.data // @todo change this from data to svm txs.
-    }
-
     /// Returns the status of this block.
     #[must_use]
     pub fn status(&self) -> choices::status::Status {
@@ -184,7 +184,7 @@ impl Block {
 
         // if already exists in database, it means it's already accepted
         // thus no need to verify once more
-        if self.state.get_block(&self.id).await.is_ok() {
+        if self.state.has_block(&self.id).await {
             log::debug!("block {} already verified", self.id);
             return Ok(());
         }
@@ -239,10 +239,31 @@ impl Block {
     /// # Errors
     /// Returns an error if the state can't be updated.
     pub async fn accept(&mut self) -> io::Result<()> {
+        let slot = self.height;
+        let cb = self.state.state_db.clone();
+        if !self.transactions.is_empty() {
+            let transactions = self.transactions.clone();
+            let mut sanity_results =
+                processor::execute_transactions(slot, cb.clone(), transactions.clone());
+            log::info!(
+                "processing results: {:?}",
+                sanity_results.processing_results
+            );
+            let (accounts_to_store, _txs) = collect_accounts_to_store(
+                &transactions,
+                &mut sanity_results.processing_results,
+                &DurableNonce::default(),
+                20,
+            );
+
+            // write changes to db.
+            cb.write_batch(accounts_to_store);
+        }
+        if !self.deploy_tx.is_empty() {
+            let deploy_txs = self.deploy_tx.clone();
+            deploy_program(&deploy_txs, &cb);
+        }
         self.set_status(choices::status::Status::Accepted);
-        // @todo execute the txs here. and persist the state changes.
-        // @todo do not execute any txs while building the block. Only sequence the txs while building the block. and execute only accepted.
-        // only decided blocks are persistent -- no reorg
         self.state.write_block(&self.clone()).await?;
         self.state.set_last_accepted_block(&self.id()).await?;
 
@@ -283,7 +304,8 @@ async fn test_block() {
         ids::Id::empty(),
         0,
         Utc::now().timestamp() as u64,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::default(),
     )
     .unwrap();
@@ -321,16 +343,15 @@ async fn test_block() {
         genesis_blk.id,
         genesis_blk.height + 1,
         genesis_blk.timestamp + 1,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::default(),
     )
     .unwrap();
     log::info!("blk1: {blk1}");
     blk1.set_state(state.clone());
-
     blk1.verify().await.unwrap();
     assert!(state.has_verified(&blk1.id()).await);
-
     blk1.accept().await.unwrap();
     assert_eq!(blk1.status, choices::status::Status::Accepted);
     assert!(!state.has_verified(&blk1.id()).await); // removed after acceptance
@@ -345,7 +366,8 @@ async fn test_block() {
         blk1.id,
         blk1.height + 1,
         blk1.timestamp + 1,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::default(),
     )
     .unwrap();
@@ -370,7 +392,8 @@ async fn test_block() {
         blk2.id,
         blk2.height - 1,
         blk2.timestamp + 1,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::default(),
     )
     .unwrap();
@@ -386,7 +409,8 @@ async fn test_block() {
         blk2.id,
         blk2.height + 1,
         (Utc::now() + Duration::hours(2)).timestamp() as u64,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::default(),
     )
     .unwrap();

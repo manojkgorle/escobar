@@ -3,19 +3,22 @@
 use std::{
     collections::HashMap,
     io::{self, Error, ErrorKind},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use crate::block::Block;
-use avalanche_types::{choices, ids, subnet};
+use crate::genesis::Genesis;
+use crate::processor::EscobarDB;
+use avalanche_types::{choices, ids};
 use pickledb::{PickleDb, PickleDbDumpPolicy, SerializationMethod};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
-
+use solana_sdk::{account::AccountSharedData, pubkey::Pubkey};
+// use tokio::sync::RwLock;
 /// Manages block and chain states for this Vm, both in-memory and persistent.
 #[derive(Clone)]
 pub struct State {
-    pub state_db: Arc<RwLock<PickleDb>>,
+    pub state_db: EscobarDB,
+    // pub cache: Arc<RwLock<HashMap<Pubkey, AccountSharedData>>>,
     pub block_db: Arc<RwLock<PickleDb>>,
     /// Maps block Id to Block.
     /// Each element is verified but not yet accepted/rejected (e.g., preferred).
@@ -24,14 +27,29 @@ pub struct State {
 
 impl Default for State {
     fn default() -> State {
+        let escobardb = EscobarDB::default();
+
         Self {
-            state_db: Arc::new(RwLock::new(PickleDb::new(
-                "state.db",
+            state_db: escobardb,
+            block_db: Arc::new(RwLock::new(PickleDb::new(
+                "block.db",
                 PickleDbDumpPolicy::AutoDump,
                 SerializationMethod::Json,
             ))),
+            verified_blocks: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl State {
+    pub fn new(data_dir: String) -> State {
+        log::info!("initializing state with data_dir: {data_dir}");
+        let escobardb = EscobarDB::new(data_dir.clone());
+        Self {
+            state_db: escobardb,
+            // cache: escobardb.cache,
             block_db: Arc::new(RwLock::new(PickleDb::new(
-                "block.db",
+                data_dir + "/block.db",
                 PickleDbDumpPolicy::AutoDump,
                 SerializationMethod::Json,
             ))),
@@ -48,12 +66,13 @@ const DELIMITER: u8 = b'/';
 
 /// Returns a vec of bytes used as a key for identifying blocks in state.
 /// '`STATUS_PREFIX`' + '`BYTE_DELIMITER`' + [`block_id`]
-fn block_with_status_key(blk_id: &ids::Id) -> Vec<u8> {
+fn block_with_status_key(blk_id: &ids::Id) -> String {
     let mut k: Vec<u8> = Vec::with_capacity(ids::LEN + 2);
     k.push(STATUS_PREFIX);
     k.push(DELIMITER);
     k.extend_from_slice(&blk_id.to_vec());
-    k
+    String::from_utf8_lossy(&k).to_string()
+    // String::from_utf16(&k).unwrap()
 }
 
 /// Wraps a [`Block`](crate::block::Block) and its status.
@@ -86,25 +105,37 @@ impl BlockWithStatus {
 }
 
 impl State {
+    pub async fn write_genesis(&self, genesis: &Genesis) -> io::Result<()> {
+        // let genesis_bytes = genesis.to_vec()?;
+        let db = &self.state_db;
+        for (i, pubkey) in genesis.pubkeys.iter().enumerate() {
+            log::info!(
+                "writing genesis account {:?} with {:?}",
+                pubkey,
+                genesis.amount[i]
+            );
+            let account = AccountSharedData::new(genesis.amount[i], 0, &Pubkey::default());
+            db.write(*pubkey, account);
+        }
+        Ok(())
+    }
     /// Persists the last accepted block Id to state.
     /// # Errors
     /// Fails if the db can't be updated
     pub async fn set_last_accepted_block(&self, blk_id: &ids::Id) -> io::Result<()> {
-        let mut db = self.block_db.write().await;
-        db.set(LAST_ACCEPTED_BLOCK_KEY, &blk_id.to_vec()).unwrap().
+        let mut db = self.block_db.write().unwrap();
+        Ok(db.set(LAST_ACCEPTED_BLOCK_KEY, &blk_id.to_vec()).unwrap())
     }
 
     /// Returns "true" if there's a last accepted block found.
     /// # Errors
     /// Fails if the db can't be read
     pub async fn has_last_accepted_block(&self) -> io::Result<bool> {
-        let db = self.db.read().await;
-        match db.has(LAST_ACCEPTED_BLOCK_KEY).await {
-            Ok(found) => Ok(found),
-            Err(e) => Err(Error::new(
-                ErrorKind::Other,
-                format!("failed to load last accepted block: {e}"),
-            )),
+        let db = self.block_db.read().unwrap();
+        if db.exists(LAST_ACCEPTED_BLOCK_KEY) {
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -112,16 +143,10 @@ impl State {
     /// # Errors
     /// Can fail if the db can't be read
     pub async fn get_last_accepted_block_id(&self) -> io::Result<ids::Id> {
-        let db = self.db.read().await;
-        match db.get(LAST_ACCEPTED_BLOCK_KEY).await {
-            Ok(d) => Ok(ids::Id::from_slice(&d)),
-            Err(e) => {
-                if subnet::rpc::errors::is_not_found(&e) {
-                    return Ok(ids::Id::empty());
-                }
-                Err(e)
-            }
-        }
+        let db = self.block_db.read().unwrap();
+        let b: Vec<u8> = db.get(LAST_ACCEPTED_BLOCK_KEY).unwrap();
+        // println!("last accepted block id: {:?}", b);
+        Ok(ids::Id::from_slice(&b))
     }
 
     /// Adds a block to "`verified_blocks`".
@@ -129,19 +154,19 @@ impl State {
         let blk_id = block.id();
         log::info!("verified added {blk_id}");
 
-        let mut verified_blocks = self.verified_blocks.write().await;
+        let mut verified_blocks = self.verified_blocks.write().unwrap();
         verified_blocks.insert(blk_id, block.clone());
     }
 
     /// Removes a block from "`verified_blocks`".
     pub async fn remove_verified(&mut self, blk_id: &ids::Id) {
-        let mut verified_blocks = self.verified_blocks.write().await;
+        let mut verified_blocks = self.verified_blocks.write().unwrap();
         verified_blocks.remove(blk_id);
     }
 
     /// Returns "true" if the block Id has been already verified.
     pub async fn has_verified(&self, blk_id: &ids::Id) -> bool {
-        let verified_blocks = self.verified_blocks.read().await;
+        let verified_blocks = self.verified_blocks.read().unwrap();
         verified_blocks.contains_key(blk_id)
     }
 
@@ -152,16 +177,14 @@ impl State {
         let blk_id = block.id();
         let blk_bytes = block.to_vec()?;
 
-        let mut db = self.db.write().await;
+        let mut db = self.block_db.write().unwrap();
 
         let blk_status = BlockWithStatus {
             block_bytes: blk_bytes,
             status: block.status(),
         };
         let blk_status_bytes = blk_status.encode()?;
-
-        db.put(&block_with_status_key(&blk_id), &blk_status_bytes)
-            .await
+        db.set(&block_with_status_key(&blk_id), &blk_status_bytes)
             .map_err(|e| Error::new(ErrorKind::Other, format!("failed to put block: {e:?}")))
     }
 
@@ -170,20 +193,30 @@ impl State {
     /// Can fail if the block is not found in the state storage, or if the block fails to deserialize
     pub async fn get_block(&self, blk_id: &ids::Id) -> io::Result<Block> {
         // check if the block exists in memory as previously verified.
-        let verified_blocks = self.verified_blocks.read().await;
+        let verified_blocks = self.verified_blocks.read().unwrap();
         if let Some(b) = verified_blocks.get(blk_id) {
             return Ok(b.clone());
         }
 
-        let db = self.db.read().await;
-
-        let blk_status_bytes = db.get(&block_with_status_key(blk_id)).await?;
+        let db = self.block_db.read().unwrap();
+        let blk_status_bytes: Vec<u8> = db.get(&block_with_status_key(blk_id)).unwrap();
         let blk_status = BlockWithStatus::from_slice(blk_status_bytes)?;
-
+        // println!("db: {:#?}", self.block_db);
         let mut blk = Block::from_slice(&blk_status.block_bytes)?;
         blk.set_status(blk_status.status);
 
         Ok(blk)
+    }
+
+    pub async fn has_block(&self, blk_id: &ids::Id) -> bool {
+        let db = self.block_db.read().unwrap();
+        db.exists(&block_with_status_key(blk_id))
+    }
+
+    pub async fn get_account_shared_data(&self, pubkey: &Pubkey) -> io::Result<AccountSharedData> {
+        let db = &self.state_db;
+        let account = db.get(pubkey).unwrap();
+        Ok(account)
     }
 }
 
@@ -199,7 +232,8 @@ async fn test_state() {
         ids::Id::empty(),
         0,
         random_manager::u64(),
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::Accepted,
     )
     .unwrap();
@@ -209,7 +243,8 @@ async fn test_state() {
         genesis_blk.id(),
         1,
         genesis_blk.timestamp() + 1,
-        random_manager::secure_bytes(10).unwrap(),
+        vec![],
+        vec![],
         choices::status::Status::Accepted,
     )
     .unwrap();
@@ -230,7 +265,6 @@ async fn test_state() {
 
     let read_blk = state.get_block(&genesis_blk.id()).await.unwrap();
     assert_eq!(genesis_blk, read_blk);
-
     let read_blk = state.get_block(&blk1.id()).await.unwrap();
     assert_eq!(blk1, read_blk);
 }

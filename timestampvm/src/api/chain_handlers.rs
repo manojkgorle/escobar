@@ -1,12 +1,16 @@
 //! Implements chain/VM specific handlers.
 //! To be served via `[HOST]/ext/bc/[CHAIN ID]/rpc`.
 
-use crate::{block::Block, vm::Vm};
+use crate::{
+    block::{deploy_tx::DeployTx, Block},
+    vm::Vm,
+};
 use avalanche_types::{ids, proto::http::Element, subnet::rpc::http::handle::Handle};
 use bytes::Bytes;
 use jsonrpc_core::{BoxFuture, Error, ErrorCode, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use serde::{Deserialize, Serialize};
+use solana_sdk::{account::ReadableAccount, pubkey::Pubkey, transaction::SanitizedTransaction};
 use std::{borrow::Borrow, io, marker::PhantomData, str::FromStr};
 
 use super::de_request;
@@ -19,9 +23,9 @@ pub trait Rpc {
     fn ping(&self) -> BoxFuture<Result<crate::api::PingResponse>>;
 
     /// Proposes the arbitrary data.
-    #[rpc(name = "proposeBlock", alias("timestampvm.proposeBlock"))]
-    fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>>; // @todo remove this method. instead add a method to submit transactions, to the endpoint.
-                                                                                                // @todo also build a block builder, that builds blocks periodically.
+    // #[rpc(name = "proposeBlock", alias("timestampvm.proposeBlock"))]
+    // fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>>; // @todo remove this method. instead add a method to submit transactions, to the endpoint.
+    // @todo also build a block builder, that builds blocks periodically.
 
     /// Fetches the last accepted block.
     #[rpc(name = "lastAccepted", alias("timestampvm.lastAccepted"))]
@@ -31,6 +35,15 @@ pub trait Rpc {
     #[rpc(name = "getBlock", alias("timestampvm.getBlock"))]
     fn get_block(&self, args: GetBlockArgs) -> BoxFuture<Result<GetBlockResponse>>;
     // @todo add method to fetch the state based on the key given.
+
+    #[rpc(name = "deployProgram", alias("timestampvm.deployProgram"))]
+    fn deploy_program(&self, args: DeployProgramArgs) -> BoxFuture<Result<DeployProgramResponse>>;
+
+    #[rpc(name = "multiTx", alias("timestampvm.multiTx"))]
+    fn multi_tx(&self, args: MultiTxArgs) -> BoxFuture<Result<MultiTxResponse>>;
+
+    #[rpc(name = "getLamports", alias("timestampvm.getLamports"))]
+    fn get_lamports(&self, args: GetLamportsArgs) -> BoxFuture<Result<GetLamportsResponse>>;
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -63,6 +76,37 @@ pub struct GetBlockResponse {
     pub block: Block,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DeployProgramArgs {
+    pub program_data: Vec<u8>,
+    pub deployment_slot: u64,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct DeployProgramResponse {
+    pub program_pub_key: Pubkey,
+    pub success: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct MultiTxArgs {
+    pub txs: Vec<SanitizedTransaction>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct MultiTxResponse {
+    pub success: bool,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct GetLamportsArgs {
+    pub pubkey: String,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct GetLamportsResponse {
+    pub lamports: u64,
+}
 /// Implements API services for the chain-specific handlers.
 #[derive(Clone)]
 pub struct ChainService<A> {
@@ -84,15 +128,55 @@ where
         Box::pin(async move { Ok(crate::api::PingResponse { success: true }) })
     }
 
-    fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>> {
-        log::debug!("propose_block called");
-        let vm = self.vm.clone();
+    // fn propose_block(&self, args: ProposeBlockArgs) -> BoxFuture<Result<ProposeBlockResponse>> {
+    //     log::debug!("propose_block called");
+    //     let vm = self.vm.clone();
 
+    //     Box::pin(async move {
+    //         vm.propose_block(args.data)
+    //             .await
+    //             .map_err(create_jsonrpc_error)?;
+    //         Ok(ProposeBlockResponse { success: true })
+    //     })
+    // }
+
+    fn deploy_program(&self, args: DeployProgramArgs) -> BoxFuture<Result<DeployProgramResponse>> {
+        log::info!("deploy_program called");
+        let vm = self.vm.clone();
+        let deploy_tx = DeployTx::new(args.program_data, args.deployment_slot);
         Box::pin(async move {
-            vm.propose_block(args.data)
+            vm.propose_block_with_deploy_program(&deploy_tx)
                 .await
                 .map_err(create_jsonrpc_error)?;
-            Ok(ProposeBlockResponse { success: true })
+            Ok(DeployProgramResponse {
+                program_pub_key: deploy_tx.get_prog_pubkey(),
+                success: true,
+            })
+        })
+    }
+
+    fn multi_tx(&self, args: MultiTxArgs) -> BoxFuture<Result<MultiTxResponse>> {
+        log::info!("multi_tx called");
+        let vm = self.vm.clone();
+        Box::pin(async move {
+            vm.propose_block_with_multi_txs(args.txs)
+                .await
+                .map_err(create_jsonrpc_error)?;
+            Ok(MultiTxResponse { success: true })
+        })
+    }
+
+    fn get_lamports(&self, args: GetLamportsArgs) -> BoxFuture<Result<GetLamportsResponse>> {
+        log::info!("get_lamports called");
+        let vm = self.vm.clone();
+        let pubk = Pubkey::from_str(&args.pubkey).unwrap();
+        Box::pin(async move {
+            vm.get_account_from_state(pubk)
+                .await
+                .map(|account| GetLamportsResponse {
+                    lamports: account.lamports(),
+                })
+                .map_err(create_jsonrpc_error)
         })
     }
 

@@ -1,7 +1,7 @@
 [workspace]
-members = [
-    "tests/e2e",
-    "timestampvm",
-]
+members = ["tests/e2e", "timestampvm"]
 
 resolver = "2"
+
+[patch.crates-io]
+solana-program-runtime = { "git" = "https://github.com/manojkgorle/agave" }

@@ -12,7 +12,7 @@ use crate::{
         chain_handlers::{ChainHandler, ChainService},
         static_handlers::{StaticHandler, StaticService},
     },
-    block::Block,
+    block::{deploy_tx::DeployTx, Block},
     genesis::Genesis,
     state,
 };
@@ -41,6 +41,9 @@ use avalanche_types::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use semver::Version;
+use solana_sdk::account::AccountSharedData;
+use solana_sdk::pubkey::Pubkey;
+use solana_sdk::transaction::SanitizedTransaction;
 use tokio::sync::{mpsc::Sender, RwLock};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -91,7 +94,8 @@ pub struct Vm<A> {
 
     /// A queue of data that have not been put into a block and proposed yet.
     /// Mempool is not persistent, so just keep in memory via Vm.
-    pub mempool: Arc<RwLock<VecDeque<Vec<u8>>>>,
+    pub mempool: Arc<RwLock<VecDeque<SanitizedTransaction>>>,
+    pub deploy_mempool: Arc<RwLock<VecDeque<DeployTx>>>,
 }
 
 impl<A> Default for Vm<A>
@@ -113,6 +117,7 @@ where
             state: Arc::new(RwLock::new(State::default())),
             app_sender: None,
             mempool: Arc::new(RwLock::new(VecDeque::with_capacity(100))),
+            deploy_mempool: Arc::new(RwLock::new(VecDeque::with_capacity(100))),
         }
     }
 
@@ -123,7 +128,7 @@ where
 
     /// Signals the consensus engine that a new block is ready to be created.
     pub async fn notify_block_ready(&self) {
-        // @todo create a steady block creation engine.
+        // @todo go with block builder method.
         let vm_state = self.state.read().await;
         if let Some(to_engine) = &vm_state.to_engine {
             to_engine
@@ -141,26 +146,28 @@ where
     /// Other VMs may optimize mempool with more complicated batching mechanisms.
     /// # Errors
     /// Can fail if the data size exceeds `PROPOSE_LIMIT_BYTES`.
-    pub async fn propose_block(&self, d: Vec<u8>) -> io::Result<()> {
-        let size = d.len();
-        log::info!("received propose_block of {size} bytes");
-
-        if size > PROPOSE_LIMIT_BYTES {
-            log::info!("limit exceeded... returning an error...");
-            return Err(Error::new(
-                ErrorKind::InvalidInput,
-                format!("data {size}-byte exceeds the limit {PROPOSE_LIMIT_BYTES}-byte"),
-            ));
-        }
-
-        let mut mempool = self.mempool.write().await;
-        mempool.push_back(d);
-        log::info!("proposed {size} bytes of data for a block");
+    pub async fn propose_block_with_deploy_program(&self, d: &DeployTx) -> io::Result<()> {
+        let mut mempool = self.deploy_mempool.write().await;
+        mempool.push_back(d.clone());
+        log::info!("deploy program added to mempool");
 
         self.notify_block_ready().await;
         Ok(())
     }
 
+    pub async fn propose_block_with_multi_txs(
+        &self,
+        txs: Vec<SanitizedTransaction>,
+    ) -> io::Result<()> {
+        let mut mempool = self.mempool.write().await;
+        for tx in txs {
+            mempool.push_back(tx);
+        }
+        log::info!("multi txs added to mempool");
+
+        self.notify_block_ready().await;
+        Ok(())
+    }
     /// Sets the state of the Vm.
     /// # Errors
     /// Will fail if the `snow::State` is syncing
@@ -206,6 +213,24 @@ where
             None => Err(Error::new(ErrorKind::NotFound, "state manager not found")),
         }
     }
+
+    pub async fn get_account_from_state(&self, pubkey: Pubkey) -> io::Result<AccountSharedData> {
+        let vm_state = self.state.read().await;
+        // vm_state.get_account_from_state(pubkey).await;
+        match &vm_state.state {
+            Some(state) => state.get_account_shared_data(&pubkey).await,
+            None => Err(Error::new(ErrorKind::NotFound, "state manager not found")),
+        }
+    }
+}
+
+pub(crate) fn setup_solana_logging() {
+    #[rustfmt::skip]
+    solana_logger::setup_with_default(
+        "solana_rbpf::vm=debug,\
+            solana_runtime::message_processor=debug,\
+            solana_runtime::system_instruction_processor=trace",
+    );
 }
 
 #[tonic::async_trait]
@@ -222,7 +247,7 @@ where
     async fn initialize(
         &mut self,
         ctx: Option<Context<Self::ValidatorState>>,
-        db_manager: BoxedDatabase,
+        _db_manager: BoxedDatabase,
         genesis_bytes: &[u8],
         _upgrade_bytes: &[u8],
         _config_bytes: &[u8],
@@ -230,22 +255,27 @@ where
         _fxs: &[snow::engine::common::vm::Fx],
         app_sender: Self::AppSender,
     ) -> io::Result<()> {
-        log::info!("initializing Vm");
+        log::info!("initializingggggg Vm");
+        setup_solana_logging();
+
         let mut vm_state = self.state.write().await;
 
-        vm_state.ctx = ctx;
-
+        vm_state.ctx = ctx.clone();
+        log::info!("post ctx");
         let version =
             Version::parse(VERSION).map_err(|e| Error::new(ErrorKind::Other, e.to_string()))?;
         vm_state.version = version;
-
+        log::info!("post version");
         let genesis = Genesis::from_slice(genesis_bytes)?;
-        vm_state.genesis = genesis;
-
-        let state = state::State {
-            db: Arc::new(RwLock::new(db_manager)),
-            verified_blocks: Arc::new(RwLock::new(HashMap::new())),
-        };
+        vm_state.genesis = genesis.clone();
+        log::info!("post geneiss");
+        // @todo write genesis to state.
+        let state = state::State::new(ctx.unwrap().chain_data_dir.clone());
+        state.write_genesis(&genesis).await?;
+        // let state = state::State {
+        //     db: Arc::new(RwLock::new(db_manager)),
+        //     verified_blocks: Arc::new(RwLock::new(HashMap::new())),
+        // };
         vm_state.state = Some(state.clone());
 
         vm_state.to_engine = Some(to_engine);
@@ -262,7 +292,8 @@ where
                 ids::Id::empty(),
                 0,
                 0,
-                vm_state.genesis.data.as_bytes().to_vec(),
+                vec![],
+                vec![],
                 choices::status::Status::default(),
             )?;
             genesis_block.set_state(state.clone());
@@ -340,14 +371,14 @@ where
 
     /// Builds a block from mempool data.
     async fn build_block(&self) -> io::Result<<Self as ChainVm>::Block> {
-        // @todo build empty blocks too.
+        // check both the mempools.
         let mut mempool = self.mempool.write().await;
-
+        let mut deploy_mempool = self.deploy_mempool.write().await;
         log::info!("build_block called for {} mempool", mempool.len());
-        if mempool.is_empty() {
-            return Err(Error::new(ErrorKind::Other, "no pending block"));
+        if mempool.is_empty() && deploy_mempool.is_empty() {
+            return Err(Error::new(ErrorKind::Other, "no pending txs in mempool"));
         }
-
+        // build block with both mempools.
         let vm_state = self.state.read().await;
         if let Some(state) = &vm_state.state {
             self.notify_block_ready().await;
@@ -359,13 +390,30 @@ where
                 .timestamp()
                 .try_into()
                 .expect("timestamp to convert from i64 to u64");
+            let mut sanity_txs: Vec<SanitizedTransaction> = vec![];
+            if mempool.is_empty() {
+                log::info!("mempool is empty");
+            } else {
+                for mem_tx in mempool.pop_back() {
+                    sanity_txs.push(mem_tx.clone());
+                }
+            }
+            let mut deploy_txs: Vec<DeployTx> = vec![];
+            if deploy_mempool.is_empty() {
+                log::info!("deploy mempool is empty");
+            } else {
+                for deploy_tx in deploy_mempool.pop_back() {
+                    let tx = deploy_tx.clone();
+                    deploy_txs.push(tx);
+                }
+            }
 
-            let first = mempool.pop_front().unwrap();
             let mut block = Block::try_new(
                 prnt_blk.id(),
                 prnt_blk.height() + 1,
                 unix_now,
-                first,
+                sanity_txs,
+                deploy_txs,
                 choices::status::Status::Processing,
             )?;
             block.set_state(state.clone());

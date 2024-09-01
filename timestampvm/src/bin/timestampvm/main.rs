@@ -8,7 +8,7 @@ use clap::{crate_version, Command};
 use timestampvm::vm;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
-pub const APP_NAME: &str = "solavim";
+pub const APP_NAME: &str = "escobar";
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
@@ -25,8 +25,8 @@ async fn main() -> io::Result<()> {
 
     match matches.subcommand() {
         Some((genesis::NAME, sub_matches)) => {
-            let data = sub_matches.get_one::<String>("DATA").expect("required");
-            let genesis = timestampvm::genesis::Genesis { data: data.clone() }; // @todo create the genesis file/block for the vm.
+            // let data = sub_matches.get_one::<String>("DATA").expect("required");
+            let genesis = timestampvm::genesis::Genesis::default();
             println!("{genesis}");
 
             Ok(())
@@ -41,7 +41,7 @@ async fn main() -> io::Result<()> {
         }
 
         _ => {
-            log::info!("starting solavim");
+            log::info!("starting escobar");
 
             let (stop_ch_tx, stop_ch_rx): (Sender<()>, Receiver<()>) = broadcast::channel(1);
             let vm_server = subnet::rpc::vm::server::Server::new(vm::Vm::new(), stop_ch_tx);
