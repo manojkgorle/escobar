@@ -16,7 +16,7 @@ avalanche-types = { version = "0.1.5", features = [
     "codec_base64",
 ] } # https://crates.io/crates/avalanche-types
 base64 = { version = "0.22.0" }
-bytes = "1.6.0"
+bytes = "1.7.1"
 chrono = "0.4.38"
 clap = { version = "4.5.4", features = [
     "cargo",
